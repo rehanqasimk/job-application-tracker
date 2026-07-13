@@ -341,6 +341,33 @@ After completing this tutorial, consider:
 - Adding job application notes/attachments
 - Implementing analytics dashboard
 
+## 🏢 Multi-Tenant Local Development
+
+This app routes tenants by **subdomain** (`user1.lvh.me:3000`) via edge middleware
+(`proxy.ts`). See `specs/001-tenant-router-middleware/` for the full design.
+
+### Setup
+
+1. Copy env: `cp .env.example .env` and set `BETTER_AUTH_SECRET` (`openssl rand -base64 32`).
+   Keep `ROOT_DOMAIN=lvh.me` and `NEXT_PUBLIC_BETTER_AUTH_URL=http://lvh.me:3000`.
+2. `npm run dev`, then open **`http://lvh.me:3000`** (not `localhost`).
+   `lvh.me` and `*.lvh.me` publicly resolve to `127.0.0.1`, so tenant subdomains
+   work with no `/etc/hosts` edits.
+3. Sign up at the apex → you're routed to `http://<your-slug>.lvh.me:3000/dashboard`.
+4. Existing users (created before this feature): backfill slugs once with
+   `npx tsx --env-file=.env scripts/backfill-subdomains.ts`.
+
+### How it works (the edge-safe bit)
+
+The middleware validates the session by reading better-auth's **signed
+session-cache cookie** with `getCookieCache()` (Web Crypto, no DB) — so it never
+imports `mongoose`/`bcrypt` and won't crash the Edge Runtime. It then injects a
+trusted `x-tenant-id` header for Server Actions to scope by. Full behavior matrix
+and verification steps: `specs/001-tenant-router-middleware/quickstart.md`.
+
+> Production: set `ROOT_DOMAIN` to your apex and provision a `*.domain` wildcard
+> DNS record + wildcard TLS cert. The code is unchanged — only env values differ.
+
 ## 📄 License
 
 This project is created for educational purposes as part of a YouTube tutorial series.

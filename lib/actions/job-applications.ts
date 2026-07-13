@@ -1,9 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getSession } from "../auth/auth";
+import { getTenantId } from "../tenant/server";
 import connectDB from "../db";
 import { Board, Column, JobApplication } from "../models";
+
+// Tenant identity comes from the `x-tenant-id` header injected by proxy.ts after
+// it verified the session at the edge — so these actions no longer make a second
+// (DB-backed) getSession() call. The header is trusted because middleware always
+// overwrites it from the verified session (contract C1). The `userId` filters
+// below remain the authoritative isolation boundary (research.md D4).
 
 interface JobApplicationData {
   company: string;
@@ -19,9 +25,9 @@ interface JobApplicationData {
 }
 
 export async function createJobApplication(data: JobApplicationData) {
-  const session = await getSession();
+  const tenantId = await getTenantId();
 
-  if (!session?.user) {
+  if (!tenantId) {
     return { error: "Unauthorized" };
   }
 
@@ -47,7 +53,7 @@ export async function createJobApplication(data: JobApplicationData) {
   // Verify board ownership
   const board = await Board.findOne({
     _id: boardId,
-    userId: session.user.id,
+    userId: tenantId,
   });
 
   if (!board) {
@@ -79,7 +85,7 @@ export async function createJobApplication(data: JobApplicationData) {
     jobUrl,
     columnId,
     boardId,
-    userId: session.user.id,
+    userId: tenantId,
     tags: tags || [],
     description,
     status: "applied",
@@ -110,9 +116,9 @@ export async function updateJobApplication(
     description?: string;
   }
 ) {
-  const session = await getSession();
+  const tenantId = await getTenantId();
 
-  if (!session?.user) {
+  if (!tenantId) {
     return { error: "Unauthorized" };
   }
 
@@ -122,7 +128,7 @@ export async function updateJobApplication(
     return { error: "Job application not found" };
   }
 
-  if (jobApplication.userId !== session.user.id) {
+  if (jobApplication.userId !== tenantId) {
     return { error: "Unauthorized" };
   }
 
@@ -236,9 +242,9 @@ export async function updateJobApplication(
 }
 
 export async function deleteJobApplication(id: string) {
-  const session = await getSession();
+  const tenantId = await getTenantId();
 
-  if (!session?.user) {
+  if (!tenantId) {
     return { error: "Unauthorized" };
   }
 
@@ -248,7 +254,7 @@ export async function deleteJobApplication(id: string) {
     return { error: "Job application not found" };
   }
 
-  if (jobApplication.userId !== session.user.id) {
+  if (jobApplication.userId !== tenantId) {
     return { error: "Unauthorized" };
   }
 

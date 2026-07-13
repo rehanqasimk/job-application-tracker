@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/auth/auth";
+import { getTenantId } from "@/lib/tenant/server";
 import connectDB from "@/lib/db";
 import { Board } from "@/lib/models";
 import { redirect } from "next/navigation";
@@ -28,12 +28,16 @@ async function getBoard(userId: string) {
 }
 
 async function DashboardPage() {
-  const session = await getSession();
-  const board = await getBoard(session?.user.id ?? "");
+  // Tenant identity was verified at the edge and injected as x-tenant-id; no
+  // second session/DB round-trip needed here. Missing => not tenant-routed
+  // (middleware should have redirected already); fail closed.
+  const tenantId = await getTenantId();
 
-  if (!session?.user) {
+  if (!tenantId) {
     redirect("/sign-in");
   }
+
+  const board = await getBoard(tenantId);
 
   return (
     <div className="min-h-screen bg-white">
@@ -42,7 +46,7 @@ async function DashboardPage() {
           <h1 className="text-3xl font-bold text-black">Job Hunt</h1>
           <p className="text-gray-600">Track your job applications</p>
         </div>
-        <KanbanBoard board={board} userId={session.user.id} />
+        <KanbanBoard board={board} userId={tenantId} />
       </div>
     </div>
   );

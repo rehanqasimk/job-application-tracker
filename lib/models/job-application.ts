@@ -85,5 +85,10 @@ const JobApplicationSchema = new Schema<IJobApplication>(
   }
 );
 
+// The board renders each column's cards sorted by `order`. Every such read
+// filters by columnId and sorts by order, so a compound index turns it into a
+// single indexed range scan (no in-memory sort). Supports SC-002.
+JobApplicationSchema.index({ columnId: 1, order: 1 });
+
 export default mongoose.models.JobApplication ||
   mongoose.model<IJobApplication>("JobApplication", JobApplicationSchema);
