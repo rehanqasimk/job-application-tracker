@@ -1,17 +1,23 @@
 import { getTenantId } from "@/lib/tenant/server";
+import { jobsTag } from "@/lib/cache-tags";
 import connectDB from "@/lib/db";
 import { Board } from "@/lib/models";
+import { cacheTag } from "next/cache";
 import { redirect } from "next/navigation";
 import KanbanBoard from "@/components/kanban-board";
 import { Suspense } from "react";
 
-async function getBoard(userId: string) {
+async function getBoard(tenantId: string) {
   "use cache";
+  // Tag this cached read so a mutation can purge exactly this tenant's job list
+  // via revalidateTag(jobsTag(tenantId)) — instead of the coarse
+  // revalidatePath("/dashboard") that blew away the whole route's cache.
+  cacheTag(jobsTag(tenantId));
 
   await connectDB();
 
   const boardDoc = await Board.findOne({
-    userId: userId,
+    userId: tenantId,
     name: "Job Hunt",
   }).populate({
     path: "columns",

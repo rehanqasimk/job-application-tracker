@@ -1,7 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { updateTag } from "next/cache";
 import { getTenantId } from "../tenant/server";
+import { jobsTag } from "../cache-tags";
 import connectDB from "../db";
 import { Board, Column, JobApplication } from "../models";
 
@@ -96,7 +97,13 @@ export async function createJobApplication(data: JobApplicationData) {
     $push: { jobApplications: jobApplication._id },
   });
 
-  revalidatePath("/dashboard");
+  // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
+  // cache, leaving the rest of the layout cached (contrast: revalidatePath would
+  // blow away the whole route). updateTag (not revalidateTag) because this runs
+  // in a Server Action and the user must see their change on the immediate
+  // re-render: updateTag expires the tag NOW (read-your-writes), whereas
+  // revalidateTag is stale-while-revalidate. See REASONING.md (Task 2).
+  updateTag(jobsTag(tenantId));
 
   return { data: JSON.parse(JSON.stringify(jobApplication)) };
 }
@@ -236,7 +243,13 @@ export async function updateJobApplication(
     new: true,
   });
 
-  revalidatePath("/dashboard");
+  // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
+  // cache, leaving the rest of the layout cached (contrast: revalidatePath would
+  // blow away the whole route). updateTag (not revalidateTag) because this runs
+  // in a Server Action and the user must see their change on the immediate
+  // re-render: updateTag expires the tag NOW (read-your-writes), whereas
+  // revalidateTag is stale-while-revalidate. See REASONING.md (Task 2).
+  updateTag(jobsTag(tenantId));
 
   return { data: JSON.parse(JSON.stringify(updated)) };
 }
@@ -263,7 +276,13 @@ export async function deleteJobApplication(id: string) {
   });
 
   await JobApplication.deleteOne({ _id: id });
-  revalidatePath("/dashboard");
+  // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
+  // cache, leaving the rest of the layout cached (contrast: revalidatePath would
+  // blow away the whole route). updateTag (not revalidateTag) because this runs
+  // in a Server Action and the user must see their change on the immediate
+  // re-render: updateTag expires the tag NOW (read-your-writes), whereas
+  // revalidateTag is stale-while-revalidate. See REASONING.md (Task 2).
+  updateTag(jobsTag(tenantId));
 
   return { success: true };
 }

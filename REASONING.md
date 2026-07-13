@@ -112,7 +112,61 @@ automated regression guard.
 
 ## Task 2 — Tag-Based Revalidation
 
-_To be written._
+### The problem
+
+The job-list read was cached with `"use cache"` but **untagged**, and every
+mutation called `revalidatePath("/dashboard")`. `revalidatePath` is the coarse,
+path-level hammer: it purges *everything* rendered at `/dashboard` (the whole
+layout, and — once Task 3 lands — the Stats sidebar too), and it is not
+tenant-aware. That is the "AI trap" the brief calls out: reaching for
+`revalidatePath` when the intent is to purge only the Jobs data.
+
+### The solution
+
+1. **Tag the cached read.** `getBoard()` now calls `cacheTag(jobsTag(tenantId))`
+   inside its `"use cache"` body (`app/dashboard/page.tsx`).
+2. **Purge by tag in the Server Action.** The three actions (create / update /
+   delete) purge that tag instead of calling `revalidatePath`. Only the Jobs
+   cache entry is invalidated; the rest of the layout stays cached.
+3. **Tenant-scoped tags.** The tag is `jobs:<tenantId>` (via `lib/cache-tags.ts`,
+   a single source of truth so reader and writer can't drift). Adding a job for
+   one tenant purges only *that* tenant's list — never another tenant's. This
+   directly composes with the Task 1 isolation model.
+
+### `revalidateTag` vs `updateTag` — followed the brief, then corrected on evidence
+
+The brief asks for `revalidateTag` within a Server Action, so that is where I
+started: `revalidateTag(jobsTag(tenantId), "max")` (Next 16 made the second
+cache-life-profile argument mandatory). It compiled and purged the correct tag.
+
+**But testing exposed a Next-16 semantics gap.** After adding a job, the new card
+did **not** appear until a manual reload. The reason: under `cacheComponents`,
+`revalidateTag` is **stale-while-revalidate** — the Server Action *does* trigger a
+route re-render, but that immediate re-render is served the *stale* cached
+`getBoard`; the tag only regenerates on a *later* request. So `revalidateTag`
+alone cannot satisfy the brief's own goal ("when a new application is added" it
+should show up).
+
+The fix is `updateTag(jobsTag(tenantId))` — Next 16's Server-Action
+**read-your-writes** primitive (its own deprecation notice for single-arg
+`revalidateTag` points here). It expires the tag *immediately*, so the action's
+re-render reads fresh data and the job appears at once. It is still tag-based and
+tenant-scoped — the actual lesson under test (targeted invalidation, **not**
+`revalidatePath`) is fully honored; only the specific function changed, for a
+reason proven by testing.
+
+| | Semantics | Use |
+|---|---|---|
+| `revalidateTag(tag, profile)` | background / stale-while-revalidate | route handlers, webhooks, cron |
+| **`updateTag(tag)`** ← used | immediate, same-request read-your-writes | **mutation in a Server Action** |
+
+### Key files
+
+| File | Change |
+|------|--------|
+| `app/dashboard/page.tsx` | `cacheTag(jobsTag(tenantId))` on the `"use cache"` job read |
+| `lib/actions/job-applications.ts` | `revalidatePath("/dashboard")` → `updateTag(jobsTag(tenantId))` (×3) |
+| `lib/cache-tags.ts` | shared, tenant-scoped `jobsTag()` helper |
 
 ---
 
