@@ -172,7 +172,77 @@ reason proven by testing.
 
 ## Task 3 — Suspense Streaming for the Stats Sidebar
 
-_To be written._
+### What was built
+
+The dashboard had no Stats sidebar, so Task 3 is: build the slow widget the brief
+describes, then apply Suspense/streaming so it never blocks the job list.
+
+- `lib/stats.ts` — `getJobStats(tenantId)`: a tenant-scoped MongoDB `$facet`
+  aggregation (total, added-this-week, per-stage counts) in a single round-trip.
+- `components/stats-sidebar.tsx` — async server component that awaits it, plus a
+  `StatsSkeleton` fallback.
+- `app/dashboard/page.tsx` — restructured into a board column + a stats sidebar,
+  each behind its **own** `<Suspense>`.
+
+### The rendering model (PPR)
+
+With `cacheComponents`, `/dashboard` is a Partial Prerender (`◐`):
+
+```
+[ static shell: header ]         ← prerendered, instant
+[ board ]   ← cached (Task 2), resolves fast, streams first
+[ stats ]   ← uncached aggregation, streams in ~later ("pops in")
+```
+
+The static header paints immediately; the cached board streams in quickly; the
+slow aggregation streams into the sidebar afterward — without holding up either.
+
+### Why this Suspense boundary (the brief asks to justify)
+
+The boundary is drawn at each **"independent data source + distinct latency"**
+seam — one `<Suspense>` around the **board**, a separate one around the **stats
+sidebar**:
+
+- **Too high (one boundary around both)** → the board's paint is coupled to the
+  slow aggregation; the fast list waits for the slow widget. This is the anti-
+  pattern the task targets.
+- **Too low (a boundary per stat number)** → pointless request waterfalls and
+  skeleton noise, no latency benefit.
+- **At the widget seam (chosen)** → the board (cheap, cached) and the stats
+  (expensive, uncached) each stream on their own timeline. The user gets the
+  interactive board immediately; the non-critical stats fill in when ready.
+
+The rule of thumb: *put the boundary around the smallest subtree that owns a
+slow, independent await* — here, the Stats sidebar.
+
+### Why the stats are dynamic (not cached)
+
+`getJobStats` is deliberately **not** `"use cache"`:
+- It must **stream** to demonstrate the pop-in; a cached value would render
+  instantly and defeat the point.
+- It stays **fresh** — a newly-added job is reflected on the next render, avoiding
+  the "list updated but totals are stale" confusion that a separately-cached,
+  non-invalidated stats surface would create.
+
+This composes cleanly with Task 2: the **board** is the cached, tag-invalidated
+surface (`jobs:<tenantId>`); the **stats** are a separate dynamic surface. Adding
+a job purges only the board's tag (Task 2) *and* the always-fresh stats recompute
+on the streamed render — two independent surfaces, each with the right lifecycle.
+
+### Demo-visibility note
+
+On a small seed dataset the aggregation returns in a few ms, so the streaming is
+invisible. `getJobStats` includes a clearly-labelled 1.5 s delay standing in for
+production-scale aggregation cost, so the pop-in is observable in dev. It is
+marked for removal.
+
+### Key files
+
+| File | Change |
+|------|--------|
+| `lib/stats.ts` | new — slow `$facet` aggregation, tenant-scoped |
+| `components/stats-sidebar.tsx` | new — async Stats widget + `StatsSkeleton` |
+| `app/dashboard/page.tsx` | split into `BoardSection` + `StatsSection`, each in its own `<Suspense>` |
 
 ---
 
