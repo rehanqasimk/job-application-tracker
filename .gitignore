@@ -41,6 +41,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# .claude
-# .specify
-# CLAUDE.md
+.claude
+.specify
+CLAUDE.md
+
+.obsidian/
+specs/
