@@ -63,31 +63,25 @@ export async function createJobApplication(data: JobApplicationData) {
     return { error: "Missing required fields" };
   }
 
-  // Verify board ownership
-  const board = await Board.findOne({
-    _id: boardId,
-    userId: tenantId,
-  });
+  // Verify board ownership + column membership and find the current max order.
+  // These three reads are independent, so run them in ONE parallel round-trip
+  // instead of three sequential ones (perf: 3 RTTs -> 1).
+  const [board, column, maxOrder] = await Promise.all([
+    Board.findOne({ _id: boardId, userId: tenantId }),
+    Column.findOne({ _id: columnId, boardId: boardId }),
+    JobApplication.findOne({ columnId })
+      .sort({ order: -1 })
+      .select("order")
+      .lean<{ order: number } | null>(),
+  ]);
 
   if (!board) {
     return { error: "Board not found" };
   }
 
-  // Verify column belongs to board
-
-  const column = await Column.findOne({
-    _id: columnId,
-    boardId: boardId,
-  });
-
   if (!column) {
     return { error: "Column not found" };
   }
-
-  const maxOrder = (await JobApplication.findOne({ columnId })
-    .sort({ order: -1 })
-    .select("order")
-    .lean()) as { order: number } | null;
 
   const jobApplication = await JobApplication.create({
     company,
@@ -198,11 +192,18 @@ export async function updateJobApplication(
     if (order !== undefined && order !== null) {
       newOrderValue = order * 100;
 
+      // Batch all the order shifts into ONE round-trip instead of one
+      // findByIdAndUpdate per card (perf: N serial writes -> 1 bulkWrite).
       const jobsThatNeedToShift = jobsInTargetColumn.slice(order);
-      for (const job of jobsThatNeedToShift) {
-        await JobApplication.findByIdAndUpdate(job._id, {
-          $set: { order: job.order + 100 },
-        });
+      if (jobsThatNeedToShift.length > 0) {
+        await JobApplication.bulkWrite(
+          jobsThatNeedToShift.map((job) => ({
+            updateOne: {
+              filter: { _id: job._id },
+              update: { $set: { order: job.order + 100 } },
+            },
+          }))
+        );
       }
     } else {
       if (jobsInTargetColumn.length > 0) {
@@ -242,18 +243,27 @@ export async function updateJobApplication(
     if (order < oldPositionindex) {
       const jobsToShiftDown = otherJobsInColumn.slice(order, oldPositionindex);
 
-      for (const job of jobsToShiftDown) {
-        await JobApplication.findByIdAndUpdate(job._id, {
-          $set: { order: job.order + 100 },
-        });
+      if (jobsToShiftDown.length > 0) {
+        await JobApplication.bulkWrite(
+          jobsToShiftDown.map((job) => ({
+            updateOne: {
+              filter: { _id: job._id },
+              update: { $set: { order: job.order + 100 } },
+            },
+          }))
+        );
       }
     } else if (order > oldPositionindex) {
       const jobsToShiftUp = otherJobsInColumn.slice(oldPositionindex, order);
-      for (const job of jobsToShiftUp) {
-        const newOrder = Math.max(0, job.order - 100);
-        await JobApplication.findByIdAndUpdate(job._id, {
-          $set: { order: newOrder },
-        });
+      if (jobsToShiftUp.length > 0) {
+        await JobApplication.bulkWrite(
+          jobsToShiftUp.map((job) => ({
+            updateOne: {
+              filter: { _id: job._id },
+              update: { $set: { order: Math.max(0, job.order - 100) } },
+            },
+          }))
+        );
       }
     }
 

@@ -320,3 +320,41 @@ the point of the Outlier preview: no join, no extra query per card.
 | `lib/actions/job-applications.ts` | record created / moved / updated / deleted events |
 | `components/job-application-card.tsx` | render the last-3 preview (join-free) |
 | `lib/models/models.types.ts` | `recentEvents` on the client type |
+
+---
+
+## Bonus — Invisible Performance Leaks
+
+The brief's intro asks to "fix several *invisible* performance leaks" — the kind
+that pass at seed-data scale and hurt in production. Several were fixed *by* the
+four tasks; three more were fixed directly. Tracked in `specs/005-perf-leaks/`.
+
+### Fixed directly
+
+1. **Serial DB writes when reordering cards** — `updateJobApplication` shifted
+   card order with three `for` loops, each doing one `findByIdAndUpdate` per
+   card: **O(n) serial round-trips** per drag. Invisible at 3 cards, pathological
+   at 300. → each loop is now a single **`bulkWrite`** (N round-trips → 1), same
+   ordering math.
+2. **Top-level `await connectDB()` in `lib/auth/auth.ts`** — opened the DB
+   connection just by *importing* the module, blocking cold starts and
+   `next build` with a Mongo handshake before any request ran. → lazy, memoized
+   **`getAuth()`**; the connection happens on first request, once. (One importer,
+   the `/api/auth` route, now builds its handler lazily too.)
+3. **Sequential independent reads in `createJobApplication`** — board, column,
+   and max-order fetched one after another → one **`Promise.all`** (3 RTTs → 1).
+
+### Fixed as a side effect of the tasks
+
+- **Per-request DB session lookup in middleware** — the old `proxy.ts` hit Mongo
+  on every navigation; Task 1's edge cookie verification removed it.
+- **Missing `(columnId, order)` index** → in-memory sorts on every board read;
+  added in Task 1.
+- **`revalidatePath` purging the whole route** on every mutation; Task 2's
+  tenant-scoped `updateTag` narrowed it to just the Jobs cache.
+- **Slow stats blocking the dashboard render**; Task 3's streaming isolated it.
+
+### Deliberately left
+
+The 1.5s delay in `lib/stats.ts` is a *labelled* demo aid (so streaming is
+visible on seed data), not a real leak — remove it for production.
