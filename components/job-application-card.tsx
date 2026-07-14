@@ -2,7 +2,14 @@
 
 import { JobApplication, Column } from "@/lib/models/models.types";
 import { Card, CardContent } from "./ui/card";
-import { Edit2, ExternalLink, MoreVertical, Plus, Trash2 } from "lucide-react";
+import {
+  Edit2,
+  ExternalLink,
+  History,
+  MoreVertical,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -129,6 +136,30 @@ export default function JobApplicationCard({
                 >
                   <ExternalLink className="h-3 w-3" />
                 </a>
+              )}
+              {/* Outlier preview (Task 4): the last-3-events snapshot read
+                  straight off the job doc — no join to the AuditLog collection. */}
+              {job.recentEvents && job.recentEvents.length > 0 && (
+                <div className="mt-2 border-t border-gray-100 pt-2">
+                  <p className="mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-gray-400">
+                    <History className="h-3 w-3" />
+                    Recent activity
+                  </p>
+                  <ul className="space-y-0.5">
+                    {job.recentEvents
+                      .slice()
+                      .reverse()
+                      .map((event, index) => (
+                        <li
+                          key={index}
+                          className="truncate text-[11px] text-muted-foreground"
+                          title={event.summary}
+                        >
+                          {event.summary}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
               )}
             </div>
             <div className="flex items-start gap-1">

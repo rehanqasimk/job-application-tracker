@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document } from "mongoose";
 
+/** Bounded "last 3 events" preview embedded on the job (Outlier Pattern). */
+export interface IRecentEvent {
+  type: string;
+  summary: string;
+  at: Date;
+}
+
 export interface IJobApplication extends Document {
   company: string;
   position: string;
@@ -15,9 +22,21 @@ export interface IJobApplication extends Document {
   appliedDate?: Date;
   tags?: string[];
   description?: string;
+  recentEvents: IRecentEvent[];
   createdAt: Date;
   updatedAt: Date;
 }
+
+// Sub-schema for the embedded preview entries. `_id: false` — these are inline
+// snapshots, not standalone documents.
+const RecentEventSchema = new Schema<IRecentEvent>(
+  {
+    type: { type: String, required: true },
+    summary: { type: String, required: true },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+);
 
 const JobApplicationSchema = new Schema<IJobApplication>(
   {
@@ -79,9 +98,19 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     description: {
       type: String,
     },
+    // Outlier Pattern: a CAPPED (last 3) denormalized preview of recent audit
+    // events. Kept in sync via $push + $slice:-3 (see lib/audit.ts). Lets the
+    // board render "recent activity" per card with NO join and NO unbounded
+    // growth — the full history lives in the AuditLog collection.
+    recentEvents: {
+      type: [RecentEventSchema],
+      default: [],
+    },
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
@@ -89,6 +118,16 @@ const JobApplicationSchema = new Schema<IJobApplication>(
 // filters by columnId and sorts by order, so a compound index turns it into a
 // single indexed range scan (no in-memory sort). Supports SC-002.
 JobApplicationSchema.index({ columnId: 1, order: 1 });
+
+// Virtual Relationship: full audit history on demand, WITHOUT storing it on the
+// document. `.populate("auditLog")` pulls every event for this job (newest
+// first) from the separate collection. Unpopulated, it costs nothing.
+JobApplicationSchema.virtual("auditLog", {
+  ref: "AuditLog",
+  localField: "_id",
+  foreignField: "jobId",
+  options: { sort: { createdAt: -1 } },
+});
 
 export default mongoose.models.JobApplication ||
   mongoose.model<IJobApplication>("JobApplication", JobApplicationSchema);

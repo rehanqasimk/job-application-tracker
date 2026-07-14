@@ -248,4 +248,75 @@ marked for removal.
 
 ## Task 4 — Audit Log (Outlier Pattern)
 
-_To be written._
+### The problem
+
+The naive audit log embeds a growing `logs[]` array on the job document. Two
+failure modes: (1) it grows unbounded toward Mongo's **16MB document cap**, and
+(2) every board query reads the *whole* job document, so the history bloats reads
+that don't even want it.
+
+### The solution — separate collection + Outlier preview + Virtual Relationship
+
+Three pieces working together:
+
+1. **Separate `AuditLog` collection** (`lib/models/audit-log.ts`) — one immutable
+   document per change (`{ jobId, userId, type, summary, changes, createdAt }`).
+   Unbounded history that never touches the job document. Indexed
+   `{ jobId, createdAt: -1 }` so "this job's history, newest first" is one scan.
+2. **Outlier preview** — a **capped** `recentEvents` array (last 3) embedded on
+   the job document. Maintained with `$push` + `$slice: -3`, so it can never
+   grow. This makes the common read — show a card with its recent activity —
+   a single, join-free document read.
+3. **Virtual Relationship** — a Mongoose `auditLog` virtual on the job
+   (`localField _id` ↔ `foreignField jobId`). `.populate("auditLog")` pulls the
+   full history on demand; unpopulated it costs nothing and stores nothing.
+
+The brief says "Virtual Relationship **or** Outlier Pattern," but the *"last 3
+preview" requirement effectively forces the Outlier pattern* (a pure virtual
+gives no embedded preview). I used **both**: Outlier for the hot preview, the
+virtual for cold full-history reads — each read pattern gets the right tool.
+
+### The write path
+
+`recordJobEvent()` (`lib/audit.ts`) does the two writes:
+
+```
+AuditLog.create(event)                              // full history (unbounded)
+JobApplication.updateOne($push recentEvents          // capped preview (last 3)
+  { $each: [snapshot], $slice: -3 })
+```
+
+Wired into all three Server Actions:
+
+| Action | Event | Notes |
+|--------|-------|-------|
+| create | `created` | |
+| update (column change) | `moved` | summary "Moved *From* → *To*" |
+| update (field edits) | `updated` | summary lists changed fields; **pure reorder is not logged** |
+| delete | `deleted` | history kept; preview push skipped (doc is gone) |
+
+Every event carries `userId` (= tenantId), so the audit trail is tenant-scoped
+like everything else.
+
+### Why the preview push is skipped on delete
+
+On delete the job document no longer exists, so there is nothing to push a
+preview onto — but the `deleted` event is still written to `AuditLog`, so the
+history **survives the record it describes**. Audit logs should outlive deletion.
+
+### UI
+
+`components/job-application-card.tsx` renders `job.recentEvents` as a small
+"Recent activity" list — read **straight off the job document**, demonstrating
+the point of the Outlier preview: no join, no extra query per card.
+
+### Key files
+
+| File | Change |
+|------|--------|
+| `lib/models/audit-log.ts` | new — separate `AuditLog` collection + `{jobId, createdAt}` index |
+| `lib/models/job-application.ts` | capped `recentEvents` preview + `auditLog` virtual + `virtuals` in toJSON |
+| `lib/audit.ts` | new — `recordJobEvent()` dual write (history + capped preview) |
+| `lib/actions/job-applications.ts` | record created / moved / updated / deleted events |
+| `components/job-application-card.tsx` | render the last-3 preview (join-free) |
+| `lib/models/models.types.ts` | `recentEvents` on the client type |

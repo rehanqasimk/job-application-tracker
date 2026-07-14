@@ -1,3 +1,9 @@
+export interface JobEvent {
+  type: string;
+  summary: string;
+  at: string;
+}
+
 export interface JobApplication {
   _id: string;
   company: string;
@@ -11,6 +17,8 @@ export interface JobApplication {
   columnId?: string;
   tags?: string[];
   description?: string;
+  // Outlier "last 3 events" preview, denormalized on the job doc (Task 4).
+  recentEvents?: JobEvent[];
 }
 
 export interface Column {

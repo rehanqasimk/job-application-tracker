@@ -3,8 +3,20 @@
 import { updateTag } from "next/cache";
 import { getTenantId } from "../tenant/server";
 import { jobsTag } from "../cache-tags";
+import { recordJobEvent } from "../audit";
 import connectDB from "../db";
 import { Board, Column, JobApplication } from "../models";
+
+// Scalar fields whose edits are worth an audit entry (Task 4).
+const AUDITED_FIELDS = [
+  "company",
+  "position",
+  "location",
+  "notes",
+  "salary",
+  "jobUrl",
+  "description",
+] as const;
 
 // Tenant identity comes from the `x-tenant-id` header injected by proxy.ts after
 // it verified the session at the edge — so these actions no longer make a second
@@ -95,6 +107,15 @@ export async function createJobApplication(data: JobApplicationData) {
 
   await Column.findByIdAndUpdate(columnId, {
     $push: { jobApplications: jobApplication._id },
+  });
+
+  // Audit log (Task 4): full event → AuditLog collection, plus a capped preview
+  // pushed onto the job's recentEvents.
+  await recordJobEvent({
+    jobId: jobApplication._id.toString(),
+    userId: tenantId,
+    type: "created",
+    summary: `Created — ${company} · ${position}`,
   });
 
   // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
@@ -243,6 +264,48 @@ export async function updateJobApplication(
     new: true,
   });
 
+  // Audit log (Task 4). A move gets a "moved" event; field edits get an
+  // "updated" event listing what changed. A pure reorder (same column, only
+  // `order` changed) is intentionally not logged — it isn't a meaningful change.
+  const before = jobApplication.toObject() as Record<string, unknown>;
+  if (isMovingToDifferentColumn) {
+    const [fromCol, toCol] = await Promise.all([
+      Column.findById(currentColumnId).select("name").lean<{ name: string } | null>(),
+      Column.findById(newColumnId).select("name").lean<{ name: string } | null>(),
+    ]);
+    await recordJobEvent({
+      jobId: id,
+      userId: tenantId,
+      type: "moved",
+      summary: `Moved ${fromCol?.name ?? "?"} → ${toCol?.name ?? "?"}`,
+      changes: { fromColumnId: currentColumnId, toColumnId: newColumnId },
+    });
+  } else {
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    for (const field of AUDITED_FIELDS) {
+      const next = otherUpdates[field];
+      if (next !== undefined && next !== before[field]) {
+        changed[field] = { from: before[field], to: next };
+      }
+    }
+    if (
+      otherUpdates.tags !== undefined &&
+      (before.tags as string[] | undefined)?.join(",") !==
+        otherUpdates.tags.join(",")
+    ) {
+      changed.tags = { from: before.tags, to: otherUpdates.tags };
+    }
+    if (Object.keys(changed).length > 0) {
+      await recordJobEvent({
+        jobId: id,
+        userId: tenantId,
+        type: "updated",
+        summary: `Updated ${Object.keys(changed).join(", ")}`,
+        changes: changed,
+      });
+    }
+  }
+
   // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
   // cache, leaving the rest of the layout cached (contrast: revalidatePath would
   // blow away the whole route). updateTag (not revalidateTag) because this runs
@@ -276,6 +339,17 @@ export async function deleteJobApplication(id: string) {
   });
 
   await JobApplication.deleteOne({ _id: id });
+
+  // Audit log (Task 4): keep the "deleted" event in the AuditLog collection so
+  // the history survives the record. recordJobEvent skips the recentEvents push
+  // here since the job document no longer exists.
+  await recordJobEvent({
+    jobId: id,
+    userId: tenantId,
+    type: "deleted",
+    summary: `Deleted — ${jobApplication.company} · ${jobApplication.position}`,
+  });
+
   // Targeted, tenant-scoped invalidation — purges ONLY this tenant's job-list
   // cache, leaving the rest of the layout cached (contrast: revalidatePath would
   // blow away the whole route). updateTag (not revalidateTag) because this runs
