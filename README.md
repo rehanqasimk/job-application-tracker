@@ -22,9 +22,9 @@ This project accompanies a YouTube tutorial series. Follow along to learn how to
 
 ### Prerequisites
 
-- Node.js 18+ installed
-- MongoDB database (local or cloud)
-- npm, yarn, pnpm, or bun
+- Node.js 20+ installed
+- Docker (to run MongoDB as a replica set locally)
+- npm
 
 ### Installation
 
@@ -41,19 +41,29 @@ cd job-application-tracker
 npm install
 ```
 
-3. Create a `.env.local` file in the root directory:
+3. Start MongoDB (a single-node replica set — required for the app's `?replicaSet=rs0` connection string and transactions):
 
-```env
-MONGODB_URI=your_mongodb_connection_string
+```bash
+docker compose up -d
 ```
 
-4. Run the development server:
+4. Create your environment file and set the auth secret:
+
+```bash
+cp .env.example .env
+# then set BETTER_AUTH_SECRET in .env, e.g. with:
+#   openssl rand -base64 32
+```
+
+The other defaults in `.env.example` (`ROOT_DOMAIN=lvh.me`, `NEXT_PUBLIC_BETTER_AUTH_URL`, the local `MONGODB_URI`) work out of the box for local development.
+
+5. Run the development server:
 
 ```bash
 npm run dev
 ```
 
-5. Open [http://localhost:3000](http://localhost:3000) in your browser.
+6. Open **[http://lvh.me:3000](http://lvh.me:3000)** in your browser — **not** `localhost`. Tenant subdomains and cross-subdomain cookies require the `lvh.me` domain (it resolves to `127.0.0.1` automatically, no `/etc/hosts` needed). See [Multi-Tenant Local Development](#-multi-tenant-local-development) below.
 
 ## 📚 Tutorial: Building the Application
 
@@ -305,9 +315,12 @@ This ensures every user starts with a functional board structure.
 
 ## 🔐 Environment Variables
 
-Required environment variables:
+See `.env.example`. Required:
 
-- `MONGODB_URI` - MongoDB connection string
+- `MONGODB_URI` — MongoDB connection string (the Docker setup provides `mongodb://localhost:27017/job-application-tracker?replicaSet=rs0`)
+- `BETTER_AUTH_SECRET` — signs/verifies the session cookies; **required** for edge session validation (generate with `openssl rand -base64 32`)
+- `ROOT_DOMAIN` — base domain for subdomain tenant routing (`lvh.me` in dev; your apex in prod)
+- `NEXT_PUBLIC_BETTER_AUTH_URL` — auth client base URL / the apex (`http://lvh.me:3000` in dev)
 
 ## 📖 Project Structure
 
